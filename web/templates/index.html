@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FunctionMap - 代码函数调用关系图</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="header">
+        <h1>🔍 FunctionMap</h1>
+        <span class="subtitle">代码函数调用关系可视化工具</span>
+    </div>
+
+    <div id="toolbar">
+        <div class="toolbar-row">
+            <input type="text" id="folderInput" placeholder="输入代码文件夹路径，如: D:/project/src" title="双击打开文件夹选择器">
+            <button id="scanBtn" onclick="startScan()">📊 开始扫描</button>
+            <button id="resetBtn" onclick="resetView()" disabled>🔄 重置视图</button>
+        </div>
+        <div class="toolbar-row" id="progressRow" style="display:none;">
+            <div class="progress-bar" id="progressBar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <span id="progressText">扫描中...</span>
+        </div>
+        <div class="toolbar-row" id="statsRow" style="display:none;">
+            <span id="statsText"></span>
+        </div>
+    </div>
+
+    <div id="mainContainer">
+        <div id="leftSidebar" class="hidden">
+            <div class="sidebar-header">
+                <h3>📋 函数列表</h3>
+                <input type="text" id="sidebarSearchInput" placeholder="筛选函数..."
+                       oninput="filterSidebar(this.value)">
+                <span id="sidebarCount"></span>
+            </div>
+            <div id="sidebarContent" class="sidebar-content">
+                <p class="hint" style="padding:20px;text-align:center;color:#999;">请先扫描代码文件夹</p>
+            </div>
+        </div>
+
+        <div id="graphContainer">
+            <div id="graphPlaceholder">
+                <div class="placeholder-content">
+                    <div class="placeholder-icon">📁</div>
+                    <h2>输入文件夹路径并点击"开始扫描"</h2>
+                    <p>支持: Python (.py) | C++ (.cpp/.hpp) | C (.c/.h) | MATLAB (.m)</p>
+                </div>
+            </div>
+            <div id="graphArea" style="display:none;"></div>
+            <div id="paramFlowInfo"></div>
+        </div>
+
+        <div id="detailPanel" class="hidden">
+            <div class="panel-header">
+                <h3>📋 函数详情</h3>
+                <button class="close-btn" onclick="closeDetail()">✕</button>
+            </div>
+            <div id="detailContent">
+                <p class="hint">从左侧列表选择函数查看详情</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="searchOverlay" class="hidden">
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="搜索函数名..." oninput="searchFunction(this.value)">
+            <div id="searchResults"></div>
+        </div>
+    </div>
+
+    <div id="statusBar">
+        <span id="statusText">就绪</span>
+        <span id="nodeCount"></span>
+    </div>
+
+    <!-- vis.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.6/standalone/umd/vis-network.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

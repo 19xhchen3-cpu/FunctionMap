@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+/.vscode/
+.idea/
+
+# Project docs (not for repo)
+/CLAUDE.md
+/MEMORY.md
+/memory/
