@@ -157,7 +157,10 @@ class CallGraph:
             self._reverse_edges_map[new_callee_id].append(edge)
 
             # 删除旧 networkx 边
-            self.graph.remove_edge(edge.caller_id, old_callee_id)
+            # 注意：同一 caller 可能有多个同 callee_name 的未解析边（如多处调用 .add()），
+            # 第一次删除后，后续同 (caller, old_callee_id) 的边已在图中被覆盖，需要跳过
+            if self.graph.has_edge(edge.caller_id, old_callee_id):
+                self.graph.remove_edge(edge.caller_id, old_callee_id)
 
             # 添加新边（实线，正常颜色）
             self.graph.add_edge(
