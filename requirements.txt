@@ -4,6 +4,7 @@ networkx>=3.0
 pyvis>=0.3.0
 jinja2>=3.0
 python-multipart>=0.0.6
+# PyInstaller 用于打包为独立可执行文件 (pip install pyinstaller)
 # 以下为可选依赖，用于C/C++精确AST解析
 # tree-sitter>=0.21.0
 # tree-sitter-cpp>=0.21.0

@@ -7,6 +7,11 @@ FunctionMap - 代码函数调用关系可视化工具
     python main.py --port 8080        # 指定端口
     python main.py --host 0.0.0.0     # 监听所有网络接口
     python main.py --path /tmp/mycode # 启动后直接扫描指定目录
+    python main.py --no-open          # 不自动打开浏览器（打包后默认自动打开）
+
+打包为可执行文件后:
+    FunctionMap.exe                  # Windows
+    FunctionMap --no-open            # 不自动打开浏览器
 """
 
 import sys
@@ -38,6 +43,24 @@ def _free_port(port: int):
         pass  # 静默失败，不影响后续启动
 
 
+def _open_browser(url: str):
+    """自动在默认浏览器中打开URL"""
+    import subprocess
+    import platform
+
+    try:
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(url)
+        elif system == 'Darwin':
+            subprocess.Popen(['open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:  # Linux
+            subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"  已自动打开浏览器: {url}")
+    except Exception as e:
+        print(f"  自动打开浏览器失败（可手动访问）: {e}")
+
+
 def main():
     """主入口"""
     import argparse
@@ -65,8 +88,15 @@ def main():
         '--path', default='',
         help='启动后自动填入的代码路径'
     )
+    parser.add_argument(
+        '--no-open', action='store_true',
+        help='不自动打开浏览器（打包后默认自动打开）'
+    )
 
     args = parser.parse_args()
+
+    # 打包后默认自动打开浏览器
+    auto_open_browser = not args.no_open and getattr(sys, 'frozen', False)
 
     print("=" * 60)
     print("  FunctionMap - 代码函数调用关系可视化工具")
@@ -90,7 +120,10 @@ def main():
     # 如果端口被占用，自动释放
     _free_port(args.port)
 
-    print(f"  访问 http://{args.host}:{args.port} 开始使用")
+    url = f"http://{args.host}:{args.port}"
+    print(f"  访问 {url} 开始使用")
+    if auto_open_browser:
+        _open_browser(url)
     print()
     run_server(host=args.host, port=args.port)
 

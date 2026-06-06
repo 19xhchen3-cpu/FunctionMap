@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 import uuid
 
 from fastapi import FastAPI, HTTPException
@@ -25,11 +26,16 @@ app = FastAPI(
     description="扫描代码文件夹，生成交互式函数调用关系拓扑图",
 )
 
-# 获取当前文件所在目录
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-TEMPLATE_PATH = os.path.join(CURRENT_DIR, "templates", "index.html")
-STATIC_DIR = os.path.join(CURRENT_DIR, "static")
+# 获取资源基础路径（支持 PyInstaller 打包后的 sys._MEIPASS）
+if getattr(sys, 'frozen', False):
+    # PyInstaller: 所有文件解压到 sys._MEIPASS
+    BASE_DIR = sys._MEIPASS
+else:
+    # 开发模式: 项目根目录（web/ 的父目录）
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+TEMPLATE_PATH = os.path.join(BASE_DIR, "web", "templates", "index.html")
+STATIC_DIR = os.path.join(BASE_DIR, "web", "static")
 
 
 @app.get("/static/{path:path}")

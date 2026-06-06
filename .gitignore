@@ -12,3 +12,9 @@ __pycache__/
 /CLAUDE.md
 /MEMORY.md
 /memory/
+
+# PyInstaller build output
+/dist/
+/build/
+*.spec
+FunctionMap.spec
