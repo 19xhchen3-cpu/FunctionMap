@@ -1,7 +1,7 @@
 """图构建器 - 根据解析结果构建 networkx 有向图"""
 
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import networkx as nx
 
@@ -384,12 +384,14 @@ class CallGraph:
         ]
 
     def extract_subgraph(self, center_id: str, depth: int = 3,
-                          max_nodes: int = 300) -> dict | None:
+                          max_nodes: int = 300, layers: int | None = None) -> dict | None:
         """
         提取以 center_id 为中心，depth 层范围内的子图
 
         BFS双向扩展: 向上找callers, 向下找callees
         max_nodes: 子图节点数上限，超过此限制时截断（防止界面卡死）
+        layers: 限制返回的层数（1=只返回 depth=1 的节点，以此类推）。
+                None 表示返回所有 depth 层。
 
         返回的每个节点包含:
         - level: 层级布局用的层级值（0=最左, 2*depth=最右）
@@ -398,20 +400,21 @@ class CallGraph:
         if center_id not in self._node_map:
             return None
 
+        # 实际需要扩展的深度（layers 限制只在输出时过滤，BFS 仍扩展到完整 depth）
+        bfs_depth = layers if layers is not None else depth
         truncated = False
 
-        # BFS向上（找callers）
+        # BFS向上（找callers），使用 deque 替代 list pop(0) 提升性能
         up_nodes: dict[str, int] = {center_id: 0}
         down_nodes: dict[str, int] = {center_id: 0}
-        queue = [(center_id, 0)]
+        queue: deque = deque([(center_id, 0)])
         while queue:
-            node_id, d = queue.pop(0)
+            node_id, d = queue.popleft()
             if d >= depth:
                 continue
             for edge in self.get_callers(node_id):
                 caller = edge.caller_id
                 if caller not in up_nodes:
-                    # 检查节点数是否超过上限（防止界面卡死）
                     if len(up_nodes) + len(down_nodes) - 1 >= max_nodes:
                         truncated = True
                         continue
@@ -419,20 +422,24 @@ class CallGraph:
                     queue.append((caller, d + 1))
 
         # BFS向下（找callees，包括外部函数）
-        queue = [(center_id, 0)]
+        queue = deque([(center_id, 0)])
         while queue:
-            node_id, d = queue.pop(0)
+            node_id, d = queue.popleft()
             if d >= depth:
                 continue
             for edge in self.get_callees(node_id):
                 callee = edge.callee_id
                 if callee not in down_nodes:
-                    # 检查节点数是否超过上限
                     if len(up_nodes) + len(down_nodes) - 1 >= max_nodes:
                         truncated = True
                         continue
                     down_nodes[callee] = d + 1
                     queue.append((callee, d + 1))
+
+        # 如果指定了 layers 限制，过滤掉超出深度的节点
+        if layers is not None and layers < depth:
+            up_nodes = {k: v for k, v in up_nodes.items() if v <= layers}
+            down_nodes = {k: v for k, v in down_nodes.items() if v <= layers}
 
         # 去重合并
         all_node_ids = set(up_nodes.keys()) | set(down_nodes.keys())
@@ -540,6 +547,54 @@ class CallGraph:
             'center': center_id,
             'depth': depth,
             'truncated': truncated,
+        }
+
+    def extract_subgraph_layer(self, center_id: str, depth: int = 3,
+                                layer: int = 1, max_nodes: int = 300) -> dict | None:
+        """
+        提取子图中指定 layer 的新增节点和边（用于前端增量加载）。
+
+        layer=1: 返回 depth=1 的所有节点和边（不含中心节点自身）
+        layer=2: 返回 depth=2 的新增节点和边（不含 depth≤1 的）
+        以此类推。
+
+        每条边至少有一端是新节点，另一端可能是已加载的旧节点。
+        """
+        full = self.extract_subgraph(center_id, depth, max_nodes)
+        if full is None:
+            return None
+
+        # 收集已加载的旧节点ID（depth < layer 的所有节点）
+        old_nodes = {n['id'] for n in full['nodes'] if n['depth'] < layer and not n.get('is_external')}
+        old_nodes.add(center_id)
+
+        # 新节点：depth == layer
+        new_nodes = [n for n in full['nodes'] if n['depth'] == layer]
+
+        if not new_nodes:
+            return {'nodes': [], 'edges': [], 'center': center_id, 'layer': layer, 'complete': True}
+
+        new_node_ids = {n['id'] for n in new_nodes}
+
+        # 新边：至少一端是新节点
+        new_edges = []
+        for e in full['edges']:
+            from_new = e['from'] in new_node_ids
+            to_new = e['to'] in new_node_ids
+            if from_new or to_new:
+                # 过滤掉两端都不是新节点的边
+                if not from_new and e['from'] not in old_nodes:
+                    continue
+                if not to_new and e['to'] not in old_nodes:
+                    continue
+                new_edges.append(e)
+
+        return {
+            'nodes': new_nodes,
+            'edges': new_edges,
+            'center': center_id,
+            'layer': layer,
+            'complete': len(new_nodes) > 0,
         }
 
     @staticmethod

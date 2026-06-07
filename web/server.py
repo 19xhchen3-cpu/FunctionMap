@@ -178,12 +178,34 @@ async def get_graph_functions(graph_id: str) -> JSONResponse:
 
 
 @app.get("/api/graph/{graph_id}/subgraph")
-async def get_subgraph(graph_id: str, func_id: str, depth: int = 3) -> JSONResponse:
-    """获取以某函数为中心的局部子图（depth层范围内）"""
+async def get_subgraph(graph_id: str, func_id: str, depth: int = 3,
+                        layers: int | None = None) -> JSONResponse:
+    """
+    获取以某函数为中心的局部子图（depth层范围内）
+
+    - layers: 限制返回层数（1=只返回depth=1，2=返回depth=1+2）。None=全部。
+    """
     call_graph = _graph_store.get(graph_id)
     if call_graph is None:
         raise HTTPException(status_code=404, detail=f"图不存在: {graph_id}")
-    result = call_graph.extract_subgraph(func_id, depth)
+    result = call_graph.extract_subgraph(func_id, depth, layers=layers)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"函数不存在: {func_id}")
+    return JSONResponse(result)
+
+
+@app.get("/api/graph/{graph_id}/subgraph-layer")
+async def get_subgraph_layer(graph_id: str, func_id: str, depth: int = 3,
+                              layer: int = 1) -> JSONResponse:
+    """
+    获取子图中指定 layer 的新增节点和边（用于前端增量加载）。
+
+    前端先加载 layers=1，然后逐层请求 layer=2、layer=3 追加到图中。
+    """
+    call_graph = _graph_store.get(graph_id)
+    if call_graph is None:
+        raise HTTPException(status_code=404, detail=f"图不存在: {graph_id}")
+    result = call_graph.extract_subgraph_layer(func_id, depth, layer)
     if result is None:
         raise HTTPException(status_code=404, detail=f"函数不存在: {func_id}")
     return JSONResponse(result)

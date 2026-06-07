@@ -230,25 +230,118 @@ async function onSidebarFunctionClick(funcId) {
     // 清除参数流高亮
     clearParamFlow();
 
-    // 获取子图
+    // 获取子图（分层增量加载）
     try {
-        setStatus(`加载子图: ${funcId.split('::').pop()}...`);
+        const funcName = funcId.split('::').pop();
+        setStatus(`加载子图: ${funcName}（第 1/3 层）...`);
 
-        const resp = await fetch(
-            `/api/graph/${currentGraphId}/subgraph?func_id=${encodeURIComponent(funcId)}&depth=3`
+        // 第1步：加载 depth=1（最邻近节点），立即渲染
+        const resp1 = await fetch(
+            `/api/graph/${currentGraphId}/subgraph?func_id=${encodeURIComponent(funcId)}&depth=3&layers=1`
         );
-        if (!resp.ok) throw new Error('获取子图失败');
-        const data = await resp.json();
+        if (!resp1.ok) throw new Error('获取子图失败');
+        const data1 = await resp1.json();
 
-        renderSubgraph(data);
+        // 首次渲染（创建 vis-network）
+        renderSubgraph(data1);
 
-        // 显示右侧详情
+        // 显示右侧详情（与渲染并行）
         showFunctionDetail(funcId);
 
-        setStatus(`子图: ${data.nodes.length} 个节点, ${data.edges.length} 条边 (中心: ${data.center.split('::').pop()})${data.truncated ? ' ⚠️ 节点过多已截断' : ''}`);
+        if (data1.truncated) {
+            setStatus(`${funcName}: ${data1.nodes.length} 节点, ${data1.edges.length} 边（已截断）`);
+        } else {
+            // 第2步：后台加载 depth=2，增量追加
+            setStatus(`加载子图: ${funcName}（第 2/3 层）...`);
+            try {
+                const resp2 = await fetch(
+                    `/api/graph/${currentGraphId}/subgraph-layer?func_id=${encodeURIComponent(funcId)}&depth=3&layer=2`
+                );
+                if (resp2.ok) {
+                    const data2 = await resp2.json();
+                    if (data2.nodes && data2.nodes.length > 0) {
+                        appendSubgraphLayer(data2);
+                    }
+                }
+            } catch (e) {
+                console.warn('第2层加载失败（不影响已显示的图）:', e);
+            }
+
+            // 第3步：后台加载 depth=3，增量追加
+            setStatus(`加载子图: ${funcName}（第 3/3 层）...`);
+            try {
+                const resp3 = await fetch(
+                    `/api/graph/${currentGraphId}/subgraph-layer?func_id=${encodeURIComponent(funcId)}&depth=3&layer=3`
+                );
+                if (resp3.ok) {
+                    const data3 = await resp3.json();
+                    if (data3.nodes && data3.nodes.length > 0) {
+                        appendSubgraphLayer(data3);
+                    }
+                }
+            } catch (e) {
+                console.warn('第3层加载失败（不影响已显示的图）:', e);
+            }
+
+            setStatus(`${funcName}: ${nodesDataset.length + (data1.nodes ? data1.nodes.length : 0)} 节点`);
+        }
     } catch (error) {
         console.error('获取子图失败:', error);
         setStatus('错误: ' + error.message);
+    }
+}
+
+// ===== 增量追加子图层级 =====
+function appendSubgraphLayer(data) {
+    if (!nodesDataset || !edgesDataset || !network) return;
+
+    const newNodes = data.nodes.map(n => ({
+        id: n.id,
+        label: n.label || n.id.split('::').pop(),
+        title: n.is_external ? `[外部函数] ${n.label}` : (n.title || n.id),
+        color: getLanguageColor(n.is_external ? 'external' : (n.language || n.group || '')),
+        size: n.is_external ? 15 : (n.depth === 0 ? 30 : (n.depth === 1 ? 24 : 18)),
+        shape: n.is_external ? 'box' : 'dot',
+        file: n.file || '',
+        language: n.language || '',
+        params: n.params || [],
+        group: n.group || '',
+        depth: n.depth || 0,
+        level: n.level !== undefined ? n.level : undefined,
+        borderWidth: n.is_external ? 1 : (n.depth === 0 ? 4 : 2),
+        is_external: n.is_external || false,
+    }));
+
+    const newEdges = data.edges.map(e => ({
+        from: e.from,
+        to: e.to,
+        label: '',
+        title: e.title || '',
+        dashes: e.dashes || false,
+        color: e.dashes
+            ? { color: 'rgba(200,200,200,0.5)', inherit: false }
+            : { color: 'rgba(100,100,100,0.6)', inherit: false },
+        width: e.dashes ? 1 : 1.5,
+        arrows: 'to',
+        smooth: { type: 'continuous' },
+        _args: e.args || [],
+    }));
+
+    // 只添加不存在的节点（避免重复）
+    const existingIds = new Set(nodesDataset.getIds());
+    const nodesToAdd = newNodes.filter(n => !existingIds.has(n.id));
+
+    // 只添加两端节点都已存在的边
+    const currentIds = new Set([...existingIds, ...nodesToAdd.map(n => n.id)]);
+    const edgesToAdd = newEdges.filter(e =>
+        currentIds.has(e.from) && currentIds.has(e.to)
+    );
+
+    if (nodesToAdd.length > 0) {
+        nodesDataset.add(nodesToAdd);
+    }
+    if (edgesToAdd.length > 0) {
+        edgesDataset.add(edgesToAdd);
     }
 }
 
