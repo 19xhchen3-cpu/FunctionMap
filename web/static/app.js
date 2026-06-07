@@ -15,10 +15,22 @@ let edgesDataset = null;
 let sidebarData = [];         // 函数列表数据（按文件分组）
 let currentFuncId = null;     // 当前选中的函数
 
+// 路径追踪状态
+let _allFuncsFlat = [];       // 所有函数的扁平列表（用于自动补全）
+let _traceActive = false;     // 是否正在显示追踪结果
+
 // ===== 页面加载就绪 =====
 document.addEventListener('DOMContentLoaded', function() {
     // 双击地址栏打开文件夹选择器
     document.getElementById('folderInput').addEventListener('dblclick', browseFolder);
+
+    // 路径追踪：回车触发
+    document.getElementById('traceFromInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') tracePath();
+    });
+    document.getElementById('traceToInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') tracePath();
+    });
 
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -100,6 +112,7 @@ async function startScan() {
 
         sidebarData = await funcResp.json();
         populateSidebar(sidebarData);
+        populateTraceSuggestions();  // 填充路径追踪的自动补全数据
 
         // Step 3: 显示sidebar，清空图区域
         document.getElementById('leftSidebar').classList.remove('hidden');
@@ -117,6 +130,7 @@ async function startScan() {
         statsRow.style.display = 'flex';
         statsText.innerHTML = `✅ ${scanData.message}`;
         resetBtn.disabled = false;
+        document.getElementById('traceRow').style.display = 'flex';
 
         const totalFuncs = sidebarData.reduce((sum, g) => sum + g.functions.length, 0);
         setStatus(`就绪 | ${totalFuncs} 个函数`);
@@ -312,7 +326,7 @@ function renderSubgraph(data) {
             hover: true,
             tooltipDelay: 200,
             navigationButtons: true,
-            keyboard: true,
+            keyboard: false,
         },
     };
 
@@ -769,6 +783,332 @@ function filterSidebar(query) {
         });
         group.style.display = visibleCount === 0 ? 'none' : '';
     });
+}
+
+// ===== 路径追踪 =====
+const TRACE_COLORS = ['#E74C3C', '#2ECC71', '#3498DB', '#F39C12', '#9B59B6'];
+
+function populateTraceSuggestions() {
+    /** 扫描完成后调用：填充 datalist 和扁平函数列表 */
+    _allFuncsFlat = [];
+    const datalist = document.getElementById('traceDatalist');
+    datalist.innerHTML = '';
+
+    // 收集所有函数的 short_name（同名时加文件后缀作区分）
+    const nameCount = {};
+    sidebarData.forEach(g => {
+        g.functions.forEach(f => {
+            _allFuncsFlat.push(f);
+            nameCount[f.short_name] = (nameCount[f.short_name] || 0) + 1;
+        });
+    });
+
+    // 填充 datalist（同名函数显示文件后缀）
+    const added = new Set();
+    sidebarData.forEach(g => {
+        g.functions.forEach(f => {
+            const displayName = nameCount[f.short_name] > 1
+                ? f.short_name + ' (' + g.file_path.split(/[/\\]/).slice(-2).join('/') + ')'
+                : f.short_name;
+            if (!added.has(displayName)) {
+                added.add(displayName);
+                const opt = document.createElement('option');
+                opt.value = displayName;
+                datalist.appendChild(opt);
+            }
+        });
+    });
+}
+
+function _matchFunc(inputText) {
+    /**
+     * 匹配输入文本到函数
+     *
+     * 支持三种输入格式：
+     * 1. "analyze_and_report" — 直接函数名
+     * 2. "main (dsAPIread/data_Process.py)" — datalist 消歧后缀格式
+     * 3. "d:\\full\\path\\file.py::func_name" — 完整 func_id
+     *
+     * 返回匹配的 func_id 或 null
+     */
+    const text = inputText.trim();
+    if (!text) return null;
+
+    // 解析 datalist 消歧格式: "name (file/path.py)"
+    let funcName = text;
+    let fileHint = '';
+    const parenMatch = text.match(/^(.+?)\s+\((.+)\)$/);
+    if (parenMatch) {
+        funcName = parenMatch[1].trim();
+        fileHint = parenMatch[2].trim();
+    }
+
+    // 1. 精确匹配 short_name（已去除消歧后缀）
+    const exact = _allFuncsFlat.filter(f => f.short_name === funcName);
+    if (exact.length === 1) return exact[0].id;
+    if (exact.length > 1) {
+        // 同名函数，尝试用 fileHint 消歧
+        if (fileHint) {
+            // 完整路径匹配
+            const byFile = exact.find(f => f.id.includes(fileHint));
+            if (byFile) return byFile.id;
+            // 只匹配文件名尾部
+            const fileTail = fileHint.split(/[/\\]/).pop();
+            if (fileTail) {
+                const byTail = exact.find(f => {
+                    const normalizedId = f.id.replace(/\\/g, '/');
+                    return normalizedId.toLowerCase().includes(fileTail.toLowerCase());
+                });
+                if (byTail) return byTail.id;
+            }
+        }
+        // 无法消歧，返回第一个
+        return exact[0].id;
+    }
+
+    // 2. 精确匹配完整 func_id
+    const idExact = _allFuncsFlat.find(f => f.id === text);
+    if (idExact) return idExact.id;
+
+    // 3. 前缀匹配
+    const q = funcName.toLowerCase();
+    const prefix = _allFuncsFlat.filter(f => f.short_name.toLowerCase().startsWith(q));
+    if (prefix.length === 1) return prefix[0].id;
+
+    // 4. 模糊包含匹配
+    const fuzzy = _allFuncsFlat.filter(f => f.short_name.toLowerCase().includes(q));
+    if (fuzzy.length === 1) return fuzzy[0].id;
+
+    // 5. 多个模糊匹配，取最短名字的
+    if (fuzzy.length > 1) {
+        fuzzy.sort((a, b) => a.short_name.length - b.short_name.length);
+        return fuzzy[0].id;
+    }
+
+    return null;
+}
+
+async function tracePath() {
+    /** 执行路径追踪 */
+    if (!currentGraphId) {
+        setStatus('请先扫描代码文件夹');
+        return;
+    }
+
+    // 从输入框文本匹配函数
+    const fromText = document.getElementById('traceFromInput').value;
+    const toText = document.getElementById('traceToInput').value;
+
+    if (!fromText || !toText) {
+        setStatus('请分别输入起始函数和目标函数名');
+        return;
+    }
+
+    const matchedFromId = _matchFunc(fromText);
+    const matchedToId = _matchFunc(toText);
+
+    if (!matchedFromId) {
+        setStatus(`未找到与 "${fromText}" 匹配的函数，请检查函数名`);
+        return;
+    }
+    if (!matchedToId) {
+        setStatus(`未找到与 "${toText}" 匹配的函数，请检查函数名`);
+        return;
+    }
+
+    // 清除旧结果
+    document.getElementById('traceResultPanel').style.display = 'none';
+    _traceActive = false;
+
+    try {
+        const fromName = matchedFromId.split('::').pop();
+        const toName = matchedToId.split('::').pop();
+        setStatus(`追踪路径: ${fromName} → ${toName}...`);
+        document.getElementById('traceStatus').textContent = '搜索中...';
+
+        const resp = await fetch(
+            `/api/graph/${currentGraphId}/trace-path` +
+            `?from_id=${encodeURIComponent(matchedFromId)}` +
+            `&to_id=${encodeURIComponent(matchedToId)}&max_paths=5`
+        );
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+
+        document.getElementById('traceStatus').textContent = '';
+        _traceActive = true;
+
+        // 显示清除按钮
+        document.getElementById('clearTraceBtn').style.display = '';
+
+        if (data.total_paths_found === 0) {
+            setStatus(`未找到从 "${data.src_name}" 到 "${data.dst_name}" 的调用路径`);
+            document.getElementById('traceStatus').textContent = '未找到路径';
+            return;
+        }
+
+        // 渲染结果面板
+        renderTraceResult(data);
+
+        // 在图中高亮路径
+        highlightTracePaths(data);
+
+        setStatus(`找到 ${data.total_paths_found} 条从 "${data.src_name}" 到 "${data.dst_name}" 的路径`);
+
+    } catch (error) {
+        document.getElementById('traceStatus').textContent = '';
+        console.error('路径追踪失败:', error);
+        setStatus('错误: ' + error.message);
+    }
+}
+
+function renderTraceResult(data) {
+    /** 在浮动面板中显示路径追踪结果 */
+    const panel = document.getElementById('traceResultPanel');
+    const content = document.getElementById('traceResultContent');
+
+    let html = `<div style="padding:4px 0;">
+        <span style="font-size:13px;color:#555;">
+            <strong>${escapeHtml(data.src_name)}</strong> → <strong>${escapeHtml(data.dst_name)}</strong>：
+            ${data.total_paths_found} 条路径
+        </span>
+    </div>`;
+
+    // 每条路径用折叠卡片展示
+    data.paths.forEach((path, idx) => {
+        const color = TRACE_COLORS[idx % TRACE_COLORS.length];
+        const isSingle = data.total_paths_found === 1;
+        html += `<div class="trace-path-card">
+            <div class="trace-path-header ${isSingle ? '' : 'collapsible'}"
+                 onclick="${isSingle ? '' : `this.classList.toggle('collapsed');const next=this.nextElementSibling;if(next)next.style.display=next.style.display==='none'?'block':'none';`}">
+                <span class="path-index" style="background:${color};">#${idx + 1}</span>
+                <span class="path-desc">${path.length} 步调用</span>
+                ${isSingle ? '' : '<span class="toggle-hint">▼</span>'}
+            </div>
+            <div class="trace-path-steps" style="display:${isSingle ? 'block' : 'block'}">
+                ${path.steps.map((step, si) => {
+                    const argsText = step.args && step.args.length > 0
+                        ? `实参: ${step.args.join(', ')}` : '';
+                    return `<div class="trace-step">
+                        <div class="trace-step-num">${si + 1}</div>
+                        <div class="trace-step-body">
+                            <span class="trace-step-func">${escapeHtml(step.from_name)}</span>
+                            <span class="trace-step-arrow">→</span>
+                            <span class="trace-step-func">${escapeHtml(step.to_name)}</span>
+                            <span class="trace-step-line">行 ${step.call_line}</span>
+                            ${argsText ? `<div class="trace-step-args">${escapeHtml(argsText)}</div>` : ''}
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>`;
+    });
+
+    content.innerHTML = html;
+    panel.style.display = 'block';
+
+    // 如果详情面板可见，切换到结果视图
+    if (nodesDataset && network) {
+        network.fit({ animation: true });
+    }
+}
+
+function highlightTracePaths(data) {
+    /** 在 vis.js 图中高亮所有路径的节点和边 */
+    if (!nodesDataset || !edgesDataset) return;
+
+    // 收集所有路径涉及的全部节点和边（去重）
+    const allPathNodes = new Set();
+    const allPathEdges = [];  // [{from, to, color}]
+
+    data.paths.forEach((path, idx) => {
+        const color = TRACE_COLORS[idx % TRACE_COLORS.length];
+        path.nodes_in_path.forEach(nid => allPathNodes.add(nid));
+        path.steps.forEach(step => {
+            allPathEdges.push({ from: step.from, to: step.to, color });
+        });
+    });
+
+    // 高亮节点：路径上的放大加边框色，路径外的变灰
+    nodesDataset.forEach(node => {
+        if (allPathNodes.has(node.id)) {
+            const isCenter = node.id === data.src_id || node.id === data.dst_id;
+            nodesDataset.update({
+                id: node.id,
+                color: { background: '#FFD700', border: '#FF8C00' },
+                borderWidth: isCenter ? 6 : 3,
+                size: isCenter ? 35 : (node.size || 20) * 1.3,
+                opacity: 1.0,
+            });
+        } else {
+            nodesDataset.update({
+                id: node.id,
+                opacity: 0.2,
+            });
+        }
+    });
+
+    // 高亮边：路径边用对应的颜色，非路径边变灰
+    const pathEdgeKeys = new Set(
+        allPathEdges.map(e => `${e.from}|${e.to}`)
+    );
+
+    edgesDataset.forEach(edge => {
+        const key = `${edge.from}|${edge.to}`;
+        if (pathEdgeKeys.has(key)) {
+            // 找到对应颜色
+            const match = allPathEdges.find(e => e.from === edge.from && e.to === edge.to);
+            const color = match ? match.color : '#E74C3C';
+            edgesDataset.update({
+                id: edge.id,
+                color: { color: color, inherit: false },
+                width: 3,
+                label: edge.label || '',
+                font: { color: color, size: 11, strokeWidth: 2 },
+            });
+        } else {
+            edgesDataset.update({
+                id: edge.id,
+                color: { color: 'rgba(200,200,200,0.1)', inherit: false },
+                width: 1,
+                label: '',
+            });
+        }
+    });
+
+    // 显示信息条
+    const flowInfo = document.getElementById('paramFlowInfo');
+    flowInfo.innerHTML = `<span>🔗 路径追踪: <strong>${escapeHtml(data.src_name)}</strong> → <strong>${escapeHtml(data.dst_name)}</strong>
+        | ${data.total_paths_found} 条路径</span>
+        <button id="clearFlowBtn" onclick="clearTracePath()">清除</button>`;
+    flowInfo.classList.add('visible');
+}
+
+function clearTracePath() {
+    /** 清除路径追踪的高亮和结果 */
+    _traceActive = false;
+
+    // 清除输入框
+    document.getElementById('traceFromInput').value = '';
+    document.getElementById('traceToInput').value = '';
+
+    // 隐藏结果面板和清除按钮
+    document.getElementById('traceResultPanel').style.display = 'none';
+    document.getElementById('clearTraceBtn').style.display = 'none';
+    document.getElementById('traceStatus').textContent = '';
+
+    // 隐藏参数流信息条（如果也在显示）
+    document.getElementById('paramFlowInfo').classList.remove('visible');
+
+    // 恢复图视图
+    if (nodesDataset && edgesDataset) {
+        clearHighlight();
+        if (network) network.fit({ animation: true });
+    }
+
+    setStatus('已清除路径追踪');
 }
 
 // ===== 辅助函数 =====

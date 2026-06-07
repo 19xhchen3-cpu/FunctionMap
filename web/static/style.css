@@ -616,3 +616,276 @@ kbd {
 #clearFlowBtn:hover {
     background: rgba(255,255,255,0.15);
 }
+
+/* ===== 路径追踪 ===== */
+.trace-input-wrapper {
+    position: relative;
+    display: inline-block;
+}
+
+.trace-input {
+    width: 160px;
+    padding: 6px 10px;
+    border: 2px solid #dce1f0;
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.trace-input:focus {
+    border-color: #667eea;
+}
+
+.trace-btn {
+    padding: 6px 14px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.trace-btn:hover:not(:disabled) {
+    background: #5a6fd6;
+}
+
+.trace-btn:disabled {
+    background: #b0b8d0;
+    cursor: not-allowed;
+}
+
+.trace-btn-clear {
+    padding: 6px 12px;
+    background: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+
+.trace-btn-clear:hover {
+    background: #c0392b;
+}
+
+/* 自动补全下拉 */
+.trace-suggest {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: white;
+    border: 1px solid #dce1f0;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    max-height: 260px;
+    overflow-y: auto;
+    margin-top: 2px;
+}
+
+.trace-suggest-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #f5f5f5;
+    transition: background 0.1s;
+}
+
+.trace-suggest-item:hover {
+    background: #f0f2ff;
+}
+
+.trace-suggest-item.hint {
+    color: #999;
+    cursor: default;
+    justify-content: center;
+}
+
+.trace-suggest-item .func-name {
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.trace-suggest-item .file-hint {
+    font-size: 11px;
+    color: #aaa;
+    margin-left: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+}
+
+/* 追踪结果面板 */
+#traceResultPanel {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    width: 380px;
+    max-height: 40vh;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.trace-result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: #fafbfc;
+    border-bottom: 1px solid #eee;
+    font-size: 13px;
+    font-weight: 600;
+    color: #2c3e50;
+    flex-shrink: 0;
+}
+
+.trace-result-header .close-btn {
+    font-size: 16px;
+    color: #999;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 6px;
+}
+
+.trace-result-header .close-btn:hover {
+    color: #666;
+}
+
+#traceResultContent {
+    overflow-y: auto;
+    padding: 10px 14px;
+    flex: 1;
+}
+
+/* 路径卡片 */
+.trace-path-card {
+    margin-bottom: 10px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.trace-path-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f8f9fb;
+    cursor: default;
+    font-size: 13px;
+}
+
+.trace-path-header .path-index {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.trace-path-header .path-desc {
+    color: #555;
+    font-size: 12px;
+}
+
+.trace-path-header .toggle-hint {
+    margin-left: auto;
+    font-size: 10px;
+    color: #aaa;
+}
+
+.trace-path-header.collapsible {
+    cursor: pointer;
+}
+
+.trace-path-header.collapsible:hover {
+    background: #eef0f6;
+}
+
+/* 路径步骤 */
+.trace-path-steps {
+    padding: 6px 12px 10px;
+}
+
+.trace-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 13px;
+    position: relative;
+}
+
+.trace-step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 9px;
+    top: 22px;
+    bottom: -5px;
+    width: 2px;
+    background: #e0e3ec;
+}
+
+.trace-step-num {
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    border-radius: 50%;
+    background: #e8ebf8;
+    color: #667eea;
+    font-size: 10px;
+    font-weight: 600;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.trace-step-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.trace-step-func {
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.trace-step-arrow {
+    margin: 0 4px;
+    color: #999;
+}
+
+.trace-step-line {
+    margin-left: 8px;
+    color: #aaa;
+    font-size: 11px;
+}
+
+.trace-step-args {
+    font-size: 11px;
+    color: #888;
+    margin-top: 2px;
+    font-family: 'Consolas', 'Courier New', monospace;
+}

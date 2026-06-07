@@ -562,6 +562,125 @@ class CallGraph:
             'outgoing': outgoing,
         }
 
+    def trace_path(self, src_id: str, dst_id: str,
+                    max_paths: int = 5, cutoff: int = 10) -> dict | None:
+        """
+        查找从 src_id 到 dst_id 的所有调用路径。
+
+        使用 networkx 的路径查找算法：
+        1. 先找最短路径（最直接的调用链）
+        2. 再在 cutoff 跳范围内找其他路径（不重复）
+
+        参数:
+            src_id: 起始函数 ID
+            dst_id: 目标函数 ID
+            max_paths: 最多返回路径数（防止超大图路径爆炸）
+            cutoff: 路径最大长度（跳数），默认 10
+
+        返回:
+            {
+                'src_id': '...',
+                'dst_id': '...',
+                'src_name': 'funcA',
+                'dst_name': 'funcB',
+                'paths': [
+                    {
+                        'length': 3,
+                        'steps': [
+                            {'from': 'A', 'to': 'B', 'call_line': 42, 'args': ['x']},
+                            {'from': 'B', 'to': 'C', 'call_line': 55, 'args': ['y']},
+                        ],
+                        'nodes_in_path': ['A', 'B', 'C'],
+                    }
+                ],
+                'total_paths_found': 1,
+            }
+            如果任一函数不存在，返回 None
+        """
+        if src_id not in self._node_map or dst_id not in self._node_map:
+            return None
+
+        if src_id == dst_id:
+            return {
+                'src_id': src_id,
+                'dst_id': dst_id,
+                'src_name': self._node_map[src_id].short_name,
+                'dst_name': self._node_map[dst_id].short_name,
+                'paths': [],
+                'total_paths_found': 0,
+                'message': '起始函数和目标函数相同',
+            }
+
+        result_paths = []
+        seen_path_sigs: set[str] = set()  # 去重
+
+        # 1. 查找最短路径
+        try:
+            sp = nx.shortest_path(self.graph, src_id, dst_id)
+            sig = '->'.join(sp)
+            if sig not in seen_path_sigs:
+                seen_path_sigs.add(sig)
+                result_paths.append(self._path_to_steps(sp))
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            pass
+
+        # 2. 在 cutoff 范围内查找所有简单路径，直到达到 max_paths
+        if len(result_paths) < max_paths:
+            try:
+                for path in nx.all_simple_paths(self.graph, src_id, dst_id, cutoff=cutoff):
+                    if len(result_paths) >= max_paths:
+                        break
+                    sig = '->'.join(path)
+                    if sig not in seen_path_sigs:
+                        seen_path_sigs.add(sig)
+                        result_paths.append(self._path_to_steps(path))
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                pass
+
+        src_name = self._node_map[src_id].short_name if src_id in self._node_map else src_id
+        dst_name = self._node_map[dst_id].short_name if dst_id in self._node_map else dst_id
+
+        return {
+            'src_id': src_id,
+            'dst_id': dst_id,
+            'src_name': src_name,
+            'dst_name': dst_name,
+            'paths': result_paths,
+            'total_paths_found': len(result_paths),
+        }
+
+    def _path_to_steps(self, path: list[str]) -> dict:
+        """
+        将 networkx 的路径（节点ID列表）转为步骤列表
+
+        每步包含:
+        - from: 调用者ID
+        - to: 被调用者ID
+        - call_line: 调用行号
+        - args: 实参列表
+        """
+        steps = []
+        for i in range(len(path) - 1):
+            frm = path[i]
+            to = path[i + 1]
+            edge_data = self.graph.get_edge_data(frm, to) or {}
+            frm_name = self._node_map[frm].short_name if frm in self._node_map else frm.split('::')[-1]
+            to_name = self._node_map[to].short_name if to in self._node_map else to.split('::')[-1]
+            steps.append({
+                'from': frm,
+                'to': to,
+                'from_name': frm_name,
+                'to_name': to_name,
+                'call_line': edge_data.get('call_line', 0),
+                'args': edge_data.get('args', []),
+            })
+
+        return {
+            'length': len(steps),
+            'steps': steps,
+            'nodes_in_path': path,
+        }
+
     def get_unresolved_calls(self) -> list[dict]:
         """获取所有未解析的外部调用"""
         unresolved = []

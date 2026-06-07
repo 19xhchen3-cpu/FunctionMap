@@ -27,6 +27,24 @@
         <div class="toolbar-row" id="statsRow" style="display:none;">
             <span id="statsText"></span>
         </div>
+        <div class="toolbar-row" id="traceRow" style="display:none;">
+            <span style="font-size:13px;color:#666;white-space:nowrap;">🔗 路径追踪</span>
+            <div class="trace-input-wrapper">
+                <input type="text" id="traceFromInput" class="trace-input"
+                       placeholder="起始函数..." title="输入函数名，自动匹配"
+                       list="traceDatalist" autocomplete="off">
+            </div>
+            <span style="color:#999;">→</span>
+            <div class="trace-input-wrapper">
+                <input type="text" id="traceToInput" class="trace-input"
+                       placeholder="目标函数..." title="输入函数名，自动匹配"
+                       list="traceDatalist" autocomplete="off">
+            </div>
+            <datalist id="traceDatalist"></datalist>
+            <button id="traceBtn" class="trace-btn" onclick="tracePath()">🔍 追踪</button>
+            <button id="clearTraceBtn" class="trace-btn-clear" onclick="clearTracePath()" style="display:none;">✕ 清除</button>
+            <span id="traceStatus" style="font-size:12px;color:#999;"></span>
+        </div>
     </div>
 
     <div id="mainContainer">
@@ -52,6 +70,13 @@
             </div>
             <div id="graphArea" style="display:none;"></div>
             <div id="paramFlowInfo"></div>
+            <div id="traceResultPanel" style="display:none;">
+                <div class="trace-result-header">
+                    <span id="traceResultTitle">🔗 路径追踪结果</span>
+                    <button class="close-btn" onclick="clearTracePath()">✕</button>
+                </div>
+                <div id="traceResultContent"></div>
+            </div>
         </div>
 
         <div id="detailPanel" class="hidden">

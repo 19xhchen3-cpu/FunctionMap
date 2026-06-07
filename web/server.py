@@ -197,6 +197,20 @@ async def get_param_flow(graph_id: str, func_id: str, param: str) -> JSONRespons
     return JSONResponse(result)
 
 
+@app.get("/api/graph/{graph_id}/trace-path")
+async def get_trace_path(graph_id: str, from_id: str, to_id: str,
+                          max_paths: int = 5) -> JSONResponse:
+    """查找两个函数之间的调用路径"""
+    call_graph = _graph_store.get(graph_id)
+    if call_graph is None:
+        raise HTTPException(status_code=404, detail=f"图不存在: {graph_id}")
+    result = call_graph.trace_path(from_id, to_id, max_paths)
+    if result is None:
+        raise HTTPException(status_code=404,
+                            detail="一个或两个函数不存在，请检查函数ID")
+    return JSONResponse(result)
+
+
 @app.get("/api/function/{graph_id}")
 async def get_function_detail(graph_id: str, func_id: str) -> JSONResponse:
     """获取函数详情（使用查询参数传递func_id，避免路径编码问题）"""
