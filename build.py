@@ -64,12 +64,8 @@ def clean_build():
     print("  清理完成\n")
 
 
-def run_pyinstaller(onefile: bool = False, jobs: int = 0):
-    """运行 PyInstaller 打包
-
-    jobs: 并行编译核数（0=自动检测CPU核数）
-    """
-    # 构建命令
+def run_pyinstaller(onefile: bool = False):
+    """运行 PyInstaller 打包"""
     cmd = [sys.executable, "-m", "PyInstaller", str(SPEC_FILE)]
 
     if onefile:
@@ -78,22 +74,8 @@ def run_pyinstaller(onefile: bool = False, jobs: int = 0):
         print("  --onefile 模式: 使用纯命令行参数（不使用 .spec 文件）")
         cmd = _build_onefile_cmd()
 
-    # 多核并行编译（通过环境变量 PYINSTALLER_PARALLEL，兼容 PyInstaller 6.x+）
-    if jobs > 0:
-        env = os.environ.copy()
-        env['PYINSTALLER_PARALLEL'] = str(jobs)
-        print(f"  并行编译: {jobs} 核")
-    elif jobs < 0:
-        # -1 表示自动检测
-        nproc = os.cpu_count() or 4
-        env = os.environ.copy()
-        env['PYINSTALLER_PARALLEL'] = str(nproc)
-        print(f"  并行编译: {nproc} 核（自动检测）")
-    else:
-        env = None
-
     print(f"运行: {' '.join(cmd)}\n")
-    subprocess.check_call(cmd, cwd=str(PROJECT_ROOT), stdout=sys.stdout, stderr=sys.stderr, env=env)
+    subprocess.check_call(cmd, cwd=str(PROJECT_ROOT), stdout=sys.stdout, stderr=sys.stderr)
 
 
 def _build_onefile_cmd() -> list[str]:
@@ -197,8 +179,6 @@ def main():
                         help="先清理旧的构建产物")
     parser.add_argument("--no-install", action="store_true",
                         help="不自动安装 PyInstaller，缺少时直接报错")
-    parser.add_argument("--jobs", "-j", type=int, default=-1,
-                        help="并行编译核数（默认 0=单线程，-1=自动使用所有 CPU 核）")
 
     args = parser.parse_args()
 
@@ -219,11 +199,9 @@ def main():
     print(f"  平台: {sys.platform}")
     print(f"  Python: {sys.version}")
     print(f"  模式: {'单文件' if args.onefile else '文件夹'}")
-    if args.jobs:
-        print(f"  并行核数: {args.jobs}")
     print()
 
-    run_pyinstaller(onefile=args.onefile, jobs=args.jobs)
+    run_pyinstaller(onefile=args.onefile)
 
     # ── 结果摘要 ──
     print_summary()
