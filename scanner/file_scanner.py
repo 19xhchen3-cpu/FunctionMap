@@ -8,7 +8,14 @@ LANGUAGE_EXTENSIONS = {
     'cpp': {'.cpp', '.cxx', '.cc', '.hpp', '.hxx', '.hh'},
     'c': {'.c', '.h'},
     'matlab': {'.m'},
+    'ui': {'.ui'},  # Qt Designer 界面文件
 }
+
+# 扫描时跳过这些目录（精确名称匹配）
+_SKIP_DIRS = frozenset({'node_modules', '__pycache__', '.git', '.svn', 'build', 'dist', 'deploy'})
+
+# 最大文件大小（超过此大小的文件跳过不解析，防止大文件卡死）
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 # 合并所有支持的扩展名，用于快速匹配
 SUPPORTED_EXTENSIONS = set()
@@ -45,11 +52,17 @@ def scan_folder(folder_path: str) -> dict[str, list[str]]:
 
     for root, dirs, files in os.walk(folder_path):
         # 跳过常见的非代码目录
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in
-                   ('node_modules', '__pycache__', '.git', '.svn', 'build', 'dist')]
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in _SKIP_DIRS]
 
         for file_name in files:
             file_path = os.path.join(root, file_name)
+            # 跳过超大文件，防止卡死
+            try:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    print(f"  跳过超大文件（>{MAX_FILE_SIZE//1024//1024}MB）: {file_path}")
+                    continue
+            except OSError:
+                continue
             lang = detect_language(file_name)
             if lang:
                 result[lang].append(os.path.normpath(file_path))
@@ -70,11 +83,16 @@ def scan_files_flat(folder_path: str) -> list[tuple[str, str]]:
         raise NotADirectoryError(f"路径不存在或不是目录: {folder_path}")
 
     for root, dirs, filenames in os.walk(folder_path):
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in
-                   ('node_modules', '__pycache__', '.git', '.svn', 'build', 'dist')]
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in _SKIP_DIRS]
 
         for file_name in filenames:
             file_path = os.path.join(root, file_name)
+            # 跳过超大文件，防止卡死
+            try:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
             lang = detect_language(file_name)
             if lang:
                 files.append((os.path.normpath(file_path), lang))

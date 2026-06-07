@@ -1134,6 +1134,7 @@ function getLanguageColor(language) {
         'cpp': { background: '#F34B7D', border: '#D43D6A' },
         'c': { background: '#555555', border: '#3D3D3D' },
         'matlab': { background: '#E16737', border: '#B8542E' },
+        'ui': { background: '#41CD52', border: '#2EA842' },
         'external': { background: '#BDC3C7', border: '#95A5A6' },
     };
     return colors[language] || { background: '#97C2FC', border: '#7DAADC' };

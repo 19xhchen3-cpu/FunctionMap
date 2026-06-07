@@ -89,7 +89,7 @@ async def scan_folder(req: ScanRequest) -> JSONResponse:
     if not files:
         raise HTTPException(status_code=400,
                             detail=f"在 {folder_path} 中未找到支持的代码文件 "
-                                   f"(.py, .cpp, .c, .h, .hpp, .m)")
+                                   f"(.py, .cpp, .c, .h, .hpp, .m, .ui)")
 
     print(f"发现 {len(files)} 个源文件")
 
@@ -105,12 +105,14 @@ async def scan_folder(req: ScanRequest) -> JSONResponse:
     from parsers.python_parser import PythonParser
     from parsers.cpp_parser import CppParser
     from parsers.matlab_parser import MatlabParser
+    from parsers.ui_parser import UiParser
 
     parser_map = {
         'python': PythonParser(),
         'cpp': CppParser(),
         'c': CppParser(),      # C和C++共用解析器
         'matlab': MatlabParser(),
+        'ui': UiParser(),       # Qt UI 文件解析器
     }
 
     # 解析所有文件
@@ -134,6 +136,9 @@ async def scan_folder(req: ScanRequest) -> JSONResponse:
     # 构建图
     call_graph = CallGraph()
     call_graph.build(all_functions, all_edges)
+
+    # 后处理：添加跨语言引用边（C++ ↔ Qt UI）
+    call_graph.add_cross_language_edges()
 
     # 存储
     _graph_store[graph_id] = call_graph

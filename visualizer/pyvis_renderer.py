@@ -24,6 +24,7 @@ class PyVisRenderer:
         'cpp': '#F34B7D',
         'c': '#555555',
         'matlab': '#E16737',
+        'ui': '#41CD52',
     }
 
     # 未解析调用（外部函数）的颜色

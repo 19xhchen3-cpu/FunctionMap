@@ -1,5 +1,6 @@
 """图构建器 - 根据解析结果构建 networkx 有向图"""
 
+import re
 from collections import defaultdict
 
 import networkx as nx
@@ -101,6 +102,82 @@ class CallGraph:
         self._resolve_cross_file_edges()
 
         return self.graph
+
+    def add_cross_language_edges(self) -> None:
+        """
+        后处理阶段：在 C++ 函数与 Qt UI widget 节点之间创建跨语言调用边。
+
+        扫描 C++ 函数体中的 ui->widgetName 模式，将每个引用链接到对应的
+        UI widget 伪函数节点，实现跨语言调用关系可视化。
+        """
+        # 收集所有 UI widget 节点
+        ui_nodes = {
+            func_id: func
+            for func_id, func in self._node_map.items()
+            if func.language == 'ui'
+        }
+        if not ui_nodes:
+            return
+
+        # 构建 widget_name -> FunctionNode 映射
+        widget_map: dict[str, FunctionNode] = {}
+        for func_id, func in ui_nodes.items():
+            widget_map[func.name] = func
+
+        # 在 C++ 源码中查找 ui->widgetName 的模式
+        ui_ref_pattern = re.compile(r'ui\s*->\s*([a-zA-Z_]\w*)')
+
+        # 遍历所有 C++ 函数节点
+        for func_id, func in list(self._node_map.items()):
+            if func.language not in ('cpp', 'c'):
+                continue
+
+            # 读取源文件，在函数范围内查找 ui-> 引用
+            try:
+                with open(func.file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+
+            for lineno in range(max(0, func.line_start - 1), min(len(lines), func.line_end)):
+                line = lines[lineno]
+                for match in ui_ref_pattern.finditer(line):
+                    widget_name = match.group(1)
+                    if widget_name not in widget_map:
+                        continue
+
+                    widget_func = widget_map[widget_name]
+                    widget_func_id = widget_func.id
+
+                    # 防止自环和重复边
+                    if widget_func_id == func_id:
+                        continue
+                    if self.graph.has_edge(func_id, widget_func_id):
+                        continue
+
+                    edge = CallEdge(
+                        caller_id=func_id,
+                        callee_id=widget_func_id,
+                        call_line=lineno + 1,
+                        args=[],
+                        is_resolved=True,
+                        callee_name=widget_name,
+                    )
+                    self._edges_map[func_id].append(edge)
+                    self._reverse_edges_map[widget_func_id].append(edge)
+
+                    self.graph.add_edge(
+                        func_id, widget_func_id,
+                        label='',
+                        title=f"ui->{widget_name} at line {lineno + 1}",
+                        dashes=False,
+                        call_line=lineno + 1,
+                        args=[],
+                        is_resolved=True,
+                        callee_name=widget_name,
+                        # 绿色边表示跨语言引用
+                        color='rgba(100,200,100,0.7)',
+                    )
 
     def _resolve_cross_file_edges(self) -> None:
         """

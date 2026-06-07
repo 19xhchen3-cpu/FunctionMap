@@ -17,4 +17,5 @@ __pycache__/
 /dist/
 /build/
 *.spec
+!functionmap.spec
 FunctionMap.spec

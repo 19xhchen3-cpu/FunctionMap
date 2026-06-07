@@ -23,31 +23,31 @@ class CppParser(BaseParser):
     - 重载函数仅解析函数名，不处理参数类型差异
     """
 
-    # 函数定义的正则模式 - 匹配标准函数定义
-    # 格式: [返回类型] 函数名(参数列表) {
+    # 函数定义的正则模式 - 仅匹配 返回类型 [类名::]函数名(
+    # 参数和 { 由调用方用 _find_matching_paren 跨行查找，避免多行正则卡死
     FUNC_DEF_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r'(?:^|\n)\s*'                                          # 行开头
-        r'(?:(?:inline|static|virtual|explicit|friend)\s+)*'     # 修饰符
-        r'((?:[a-zA-Z_]\w*\s*(?:<[^>]*>)?\s*(?:\s*&|\s*\*)?\s*' # 返回类型
-        r'(?:\s+[a-zA-Z_]\w*)?(?:\s*::\s*[a-zA-Z_]\w*)?\s*'    # 命名空间::类型
-        r'(?:\s*<[^>]*>)?(?:\s*&|\s*\*)?\s*)*?)'                # 模板参数
+        r'^\s*'                                                 # 行开头 + 缩进
+        r'(?:(?:inline|static|virtual|explicit|friend|constexpr)\s+)*'
+        r'(?:[a-zA-Z_]\w*(?:\s*<[^>]*>)?\s*(?:\s*&|\s*\*)?\s*)' # 返回类型（必选，至少一个）
+        r'(?:[a-zA-Z_]\w*\s*::\s*)?'                            # 可选 类名::
         r'([a-zA-Z_~]\w*)\s*'                                   # 函数名（含析构~）
-        r'\('                                                   # 参数列表开始
-        r'([^)]*?)'                                             # 参数列表内容
-        r'\)\s*'                                                # 参数列表结束
-        r'(?:const\s+)?(?:override\s+)?(?:final\s+)?'           # C++修饰符
-        r'(?:throw\s*\([^)]*\)\s*)?'                           # 异常声明
-        r'(?:=\s*(?:0|delete|default)\s*)?'                    # 纯虚/删除/默认
-        r'(?:\{|;)'                                              # 函数体开始或声明
+        r'\('                                                   # ( 开始
     )
 
-    # 函数调用模式
+    # 函数定义正则 - 宽松版，匹配 类名::函数名( 或 ~函数名(
+    FUNC_DEF_LAX_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r'^\s*'
+        r'(?:(?:inline|static|virtual|explicit|friend|constexpr)\s+)*'
+        r'(?:[a-zA-Z_]\w*\s*::\s*)?'                            # 可选 类名::
+        r'([a-zA-Z_~]\w*)\s*'                                   # 函数名
+        r'\('
+    )
+
+    # 函数调用模式 - 单行匹配
     CALL_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r'(?<![\.\w])'                      # 前面不是 . 或单词字符
-        r'([a-zA-Z_]\w*)\s*'                # 函数名
-        r'\('                               # 开始括号
-        r'([^()]*(?:\([^()]*\)[^()]*)*)'    # 参数（支持嵌套括号）
-        r'\)'                               # 结束括号
+        r'(?<![\.\w])'
+        r'([a-zA-Z_]\w*)\s*'
+        r'\('
     )
 
     # 需要排除的关键字（不是函数名）
@@ -58,6 +58,10 @@ class CppParser(BaseParser):
         'typename', 'const', 'constexpr', 'static_cast', 'dynamic_cast',
         'reinterpret_cast', 'const_cast', 'typeid', 'decltype',
         'ifdef', 'ifndef', 'endif', 'define', 'include', 'pragma',
+        # Qt 框架关键字/宏（防止被误识别为函数名）
+        'emit', 'signals', 'slots', 'qobject_cast',
+        'SIGNAL', 'SLOT',
+        'Q_DECLARE_METATYPE', 'Q_ENUM', 'Q_FLAG', 'Q_INVOKABLE',
     })
 
     # 简单类型关键字（匹配类型时视为类型而非函数名）
@@ -328,7 +332,7 @@ class CppParser(BaseParser):
         return name, False
 
     def _parse_with_regex(self, file_path: str) -> tuple[list[FunctionNode], list[CallEdge]]:
-        """使用正则表达式解析C/C++文件"""
+        """使用逐行解析方法提取C/C++函数定义和调用（避免正则回溯卡死）"""
         source = self._read_source(file_path)
         if source is None:
             return [], []
@@ -340,110 +344,310 @@ class CppParser(BaseParser):
         clean_source = self._strip_comments_and_strings(source)
         clean_lines = clean_source.split('\n')
 
+        # 预处理：移除 Qt Q_PROPERTY 宏，防止误匹配
+        clean_source = re.sub(r'Q_PROPERTY\s*\([^)]*\)\s*', '', clean_source)
+        clean_lines = clean_source.split('\n')
+
         functions: list[FunctionNode] = []
         calls: list[CallEdge] = []
 
-        self._regex_extract_functions(clean_source, clean_lines, file_path, language, functions)
-        self._regex_extract_calls(clean_source, clean_lines, source, lines, file_path, functions, calls)
+        # 第一阶段：逐行提取函数定义
+        self._line_based_extract_functions(clean_lines, source.split('\n'), file_path, language, functions)
+        if not functions:
+            return [], []
+
+        # 第二阶段：在函数体内提取调用
+        self._line_based_extract_calls(clean_lines, source.split('\n'), file_path, functions, calls)
 
         return functions, calls
 
-    def _regex_extract_functions(self, clean_source: str, clean_lines: list[str],
-                                  file_path: str, language: str,
-                                  functions: list[FunctionNode]) -> None:
-        """用正则提取函数定义"""
-        # 用更精确的模式匹配函数定义
-        # 模式: 先找 { 和 ; 确定块范围，再往前找函数名
-        func_name_pattern = re.compile(
-            r'(?:^|\n)\s*'
-            r'(?:(?:inline|static|virtual|explicit|friend|constexpr)\s+)*'
-            r'(?:[a-zA-Z_]\w*(?:\s*<[^>]*>)?\s*(?:\s*&|\s*\*)?\s*'
-            r'(?:\s+[a-zA-Z_]\w*)?(?:\s*::\s*[a-zA-Z_]\w*)?\s*'
-            r'(?:\s*<[^>]*>)?(?:\s*&|\s*\*)?\s*)*?'
-            r'([a-zA-Z_~]\w*)\s*'
-            r'\('
-            r'([^)]*?)'
-            r'\)\s*'
-            r'(?:const\s+)?(?:override\s+)?(?:final\s+)?'
-            r'(?:throw\s*\([^)]*\)\s*)?'
-            r'(?:=\s*(?:0|delete|default)\s*)?'
-            r'\s*(\{|;)'
-        )
+    def _find_matching_paren(self, lines: list[str], start_lineno: int, start_col: int) -> tuple[int, int] | None:
+        """
+        从 (start_lineno, start_col) 开始找到匹配的 )。
+        支持跨行和嵌套括号。
+        返回 (行号, 列号) 或 None。
+        """
+        depth = 1
+        lineno = start_lineno
+        col = start_col
+        while lineno < len(lines):
+            line = lines[lineno]
+            while col < len(line):
+                ch = line[col]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return lineno, col
+                col += 1
+            lineno += 1
+            col = 0
+        return None
 
-        seen_funcs: set[tuple[str, int]] = set()  # (func_name, start_line)
+    def _line_based_extract_functions(self, clean_lines: list[str], lines: list[str],
+                                       file_path: str, language: str,
+                                       functions: list[FunctionNode]) -> None:
+        """
+        逐行扫描提取函数定义。
 
-        for match in func_name_pattern.finditer(clean_source):
-            func_name = match.group(1)
-            params_str = match.group(2).strip()
-            brace = match.group(3)
+        用正则匹配单行的函数名+( 模式，然后用 _find_matching_paren 跨行
+        查找匹配的 ) 和 {，避免多行正则回溯。
+        """
+        seen_funcs: set[tuple[str, int]] = set()
 
-            # 过滤关键字
-            if func_name in self.KEYWORDS:
+        for lineno in range(len(clean_lines)):
+            line = clean_lines[lineno]
+            if not line.strip():
                 continue
 
-            # 过滤类型名（如 int, char 等作为函数名）
-            if func_name in self.TYPE_KEYWORDS:
-                continue
+            for pattern, has_return_type in [(self.FUNC_DEF_PATTERN, True),
+                                              (self.FUNC_DEF_LAX_PATTERN, False)]:
+                match = pattern.match(line)
+                if not match:
+                    continue
 
-            # 过滤构造/析构前的不完整匹配
-            if func_name == 'if' or func_name == 'else':
-                continue
+                func_name = match.group(1)
 
-            # 检查匹配位置前面的上下文
-            # 如果函数名前有 =, return, case 等，说明是赋值或返回语句，不是定义
-            pre_context = clean_source[max(0, match.start() - 30):match.start()]
-            if re.search(r'[=,]\s*$', pre_context):
-                continue
-            if re.search(r'(return|case|throw|goto)\s+$', pre_context):
-                continue
+                # ----- 过滤器 -----
+                if func_name in self.KEYWORDS or func_name in self.TYPE_KEYWORDS:
+                    continue
+                if len(func_name) <= 1:
+                    continue
 
-            # 过滤已知的C库函数（它们不可能是定义）
-            if func_name in ('printf', 'scanf', 'fprintf', 'sprintf', 'fscanf',
-                             'malloc', 'free', 'calloc', 'realloc', 'memcpy',
-                             'memmove', 'memset', 'strcpy', 'strlen', 'strcmp',
-                             'sizeof', 'assert', 'exit', 'atoi', 'atof', 'abs',
-                             'sqrt', 'pow', 'sin', 'cos', 'tan', 'log', 'exp',
-                             'fabs', 'ceil', 'floor', 'round'):
-                continue
+                # 上下文：前面不能有 = , . { return case throw goto
+                # 如果前面有 {，说明在代码块内部（lambda 等），不是函数定义
+                pre_context = line[:match.start()]
+                if re.search(r'[=,.]\s*$', pre_context):
+                    continue
+                if re.search(r'(return|case|throw|goto)\s+$', pre_context):
+                    continue
+                if pre_context.strip().endswith(('&', '*', 'const', 'mutable')):
+                    continue
+                if '{' in pre_context:
+                    continue
 
-            # 计算行号
-            start_pos = match.start()
-            start_line = clean_source[:start_pos].count('\n') + 1
+                # 库函数过滤
+                if func_name in ('printf', 'scanf', 'fprintf', 'sprintf', 'fscanf',
+                                 'malloc', 'free', 'calloc', 'realloc', 'memcpy',
+                                 'memmove', 'memset', 'strcpy', 'strlen', 'strcmp',
+                                 'assert', 'exit', 'atoi', 'atof', 'abs',
+                                 'sqrt', 'pow', 'sin', 'cos', 'tan', 'log', 'exp',
+                                 'fabs', 'ceil', 'floor', 'round',
+                                 'connect', 'disconnect', 'emit'):
+                    continue
 
-            # 去重：同一函数名在相同位置定义
-            if (func_name, start_line) in seen_funcs:
-                continue
-            seen_funcs.add((func_name, start_line))
+                # 变量声明检测：TypeName variableName(args) 模式
+                if has_return_type:
+                    text_before_func = match.group(0)[:match.group(0).find(func_name)]
+                    # 如果函数名前有 ::，说明是限定名（ClassName::funcName），跳过检测
+                    if '::' not in text_before_func:
+                        rt_words = text_before_func.strip().split()
+                        if (rt_words and rt_words[-1][0].isupper()
+                                and func_name[0].islower()):
+                            continue
 
-            # 计算结束行号
-            end_line = start_line
-            if brace == '{':
-                # 尝试匹配对应的 }
-                start_brace_pos = match.end() - 1  # { 的位置
-                brace_count = 1
-                pos = start_brace_pos + 1
-                while pos < len(clean_source) and brace_count > 0:
-                    if clean_source[pos] == '{':
-                        brace_count += 1
-                    elif clean_source[pos] == '}':
-                        brace_count -= 1
-                    pos += 1
-                if brace_count == 0:
-                    end_line = clean_source[:pos].count('\n') + 1
+                # 找到本行第一个 (
+                open_paren_idx = line.find('(', match.start())
+                if open_paren_idx == -1:
+                    continue
 
-            # 提取参数名
-            params = self._extract_params(params_str)
+                # 找匹配的 )
+                paren = self._find_matching_paren(clean_lines, lineno, open_paren_idx + 1)
+                if paren is None:
+                    continue
+                close_lineno, close_col = paren
 
-            func_id = f"{file_path}::{func_name}"
-            functions.append(FunctionNode(
-                id=func_id,
-                name=func_name,
-                file_path=file_path,
-                line_start=start_line,
-                line_end=end_line,
-                language=language,
-                params=params,
-            ))
+                # 从 ) 后面往前最多找 5 行看有没有 {
+                found_brace = False
+                brace_lineno = close_lineno
+                for scan in range(5):
+                    scan_line = close_lineno + scan
+                    if scan_line >= len(clean_lines):
+                        break
+                    if scan == 0:
+                        text = clean_lines[scan_line][close_col:]
+                    else:
+                        text = clean_lines[scan_line]
+                    # 确保 { 不是出现在 lambda [] 或 () 或 {} 内部
+                    brace_pos = text.find('{')
+                    if brace_pos >= 0:
+                        # 检查这个 { 之前的文本：如果括号深度 > 0，说明 { 在表达式内部
+                        text_before = text[:brace_pos]
+                        opens = text_before.count('(') + text_before.count('[') + text_before.count('{')
+                        closes = text_before.count(')') + text_before.count(']') + text_before.count('}')
+                        if opens <= closes:
+                            found_brace = True
+                            brace_lineno = scan_line
+                            break
+
+                if not found_brace:
+                    continue
+
+                # 6. 检查是否在已找到的函数体内（排除函数调用被误识别为定义）
+                inside_existing = False
+                for existing in functions:
+                    if existing.line_start < lineno + 1 <= existing.line_end:
+                        inside_existing = True
+                        break
+                if inside_existing:
+                    continue
+
+                # 7. 关键检测：如果参数文本中包含 {（lambda），说明这是函数调用而非定义
+                # 提取参数文本并检查
+                if close_lineno == lineno:
+                    param_check = line[open_paren_idx + 1:close_col]
+                else:
+                    param_parts = [line[open_paren_idx + 1:]]
+                    for pl in range(lineno + 1, close_lineno):
+                        param_parts.append(clean_lines[pl])
+                    param_parts.append(clean_lines[close_lineno][:close_col])
+                    param_check = ' '.join(param_parts)
+                if '{' in param_check:
+                    continue
+
+                # 去重
+                if (func_name, lineno + 1) in seen_funcs:
+                    continue
+                seen_funcs.add((func_name, lineno + 1))
+
+                # 计算函数结束行号
+                end_line = self._find_block_end(clean_lines, brace_lineno, lineno + 1)
+
+                # 提取参数名（跨行时拼接）
+                if close_lineno == lineno:
+                    param_text = line[open_paren_idx + 1:close_col]
+                else:
+                    parts = [line[open_paren_idx + 1:]]
+                    for pl in range(lineno + 1, close_lineno):
+                        parts.append(clean_lines[pl])
+                    parts.append(clean_lines[close_lineno][:close_col])
+                    param_text = ' '.join(parts)
+                params = self._extract_params(param_text)
+
+                func_id = f"{file_path}::{func_name}"
+                functions.append(FunctionNode(
+                    id=func_id,
+                    name=func_name,
+                    file_path=file_path,
+                    line_start=lineno + 1,
+                    line_end=end_line,
+                    language=language,
+                    params=params,
+                ))
+                break  # pattern loop
+
+    def _find_block_end(self, lines: list[str], brace_line: int, fallback: int) -> int:
+        """从 { 所在行开始，找到匹配的 } 行号（1-indexed）"""
+        brace_count = 0
+        found_open = False
+        for lineno in range(brace_line, len(lines)):
+            for ch in lines[lineno]:
+                if ch == '{':
+                    brace_count += 1
+                    found_open = True
+                elif ch == '}':
+                    brace_count -= 1
+                    if found_open and brace_count == 0:
+                        return lineno + 1
+        return fallback
+
+    def _line_based_extract_calls(self, clean_lines: list[str], lines: list[str],
+                                   file_path: str, functions: list[FunctionNode],
+                                   calls: list[CallEdge]) -> None:
+        """
+        在已识别的函数体内逐行提取调用关系。
+        对每个函数，扫描其行范围，用简单正则找到 name( 模式，
+        然后用括号平衡匹配提取完整参数。
+        """
+        for func in functions:
+            func_start = func.line_start - 1  # 0-indexed
+            func_end = min(func.line_end, len(clean_lines))
+
+            for lineno in range(func_start, func_end):
+                line = clean_lines[lineno]
+                if not line.strip():
+                    continue
+
+                # 使用简单正则找所有 name( 模式
+                for match in self.CALL_PATTERN.finditer(line):
+                    callee_name = match.group(1)
+                    call_col = match.end()  # 位置在 ( 之后
+
+                    # 过滤关键字
+                    if callee_name in self.KEYWORDS or callee_name in self.TYPE_KEYWORDS:
+                        continue
+                    if len(callee_name) <= 1:
+                        continue
+
+                    # 找到匹配的 )
+                    result = self._find_matching_paren(clean_lines, lineno, call_col)
+                    if result is None:
+                        continue
+
+                    # 提取参数文本
+                    end_lineno, end_col = result
+                    if end_lineno == lineno:
+                        args_str = line[call_col:end_col]
+                    else:
+                        parts = [line[call_col:]]
+                        for al in range(lineno + 1, end_lineno):
+                            parts.append(clean_lines[al])
+                        parts.append(clean_lines[end_lineno][:end_col])
+                        args_str = ','.join(parts)
+
+                    # 解析参数
+                    args = self._extract_call_args(args_str)
+
+                    resolved_id, resolved = self._resolve_func_name(callee_name, functions)
+                    calls.append(CallEdge(
+                        caller_id=func.id,
+                        callee_id=resolved_id,
+                        call_line=lineno + 1,
+                        args=args,
+                        is_resolved=resolved,
+                        callee_name=callee_name,
+                    ))
+
+    def _find_enclosing_func_regex(self, line: int, functions: list[FunctionNode]) -> FunctionNode | None:
+        """查找包含某行代码的函数"""
+        candidates = []
+        for func in functions:
+            if func.line_start < line <= func.line_end:
+                candidates.append(func)
+        if candidates:
+            candidates.sort(key=lambda f: f.line_start, reverse=True)
+            return candidates[0]
+        return None
+
+    def _extract_call_args(self, args_str: str) -> list[str]:
+        """从调用参数串中提取实参"""
+        if not args_str:
+            return []
+
+        args = []
+        depth = 0
+        current = ''
+        for ch in args_str:
+            if ch == ',' and depth == 0:
+                arg = current.strip()
+                if arg:
+                    args.append(arg[:50])  # 截断长表达式
+                current = ''
+            elif ch in '({[':
+                depth += 1
+                current += ch
+            elif ch in ')}]':
+                depth -= 1
+                current += ch
+            else:
+                current += ch
+
+        arg = current.strip()
+        if arg:
+            args.append(arg[:50])
+
+        return args
 
     def _extract_params(self, params_str: str) -> list[str]:
         """从参数列表中提取参数名"""
@@ -492,83 +696,3 @@ class CppParser(BaseParser):
                     params.append('')
 
         return [p for p in params if p]
-
-    def _regex_extract_calls(self, clean_source: str, clean_lines: list[str],
-                              source: str, lines: list[str],
-                              file_path: str,
-                              functions: list[FunctionNode],
-                              calls: list[CallEdge]) -> None:
-        """用正则提取函数调用"""
-        for match in self.CALL_PATTERN.finditer(clean_source):
-            func_name = match.group(1)
-            args_str = match.group(2)
-
-            # 过滤关键字
-            if func_name in self.KEYWORDS:
-                continue
-            if func_name in self.TYPE_KEYWORDS:
-                continue
-
-            # 过滤过短的匹配
-            if len(func_name) == 1:
-                continue
-
-            # 找到所在函数
-            call_line = clean_source[:match.start()].count('\n') + 1
-            caller = self._find_enclosing_func_regex(call_line, functions)
-            if not caller:
-                continue
-
-            # 提取实参
-            args = self._extract_call_args(args_str)
-
-            # 解析被调用函数
-            resolved_id, resolved = self._resolve_func_name(func_name, functions)
-            calls.append(CallEdge(
-                caller_id=caller.id,
-                callee_id=resolved_id,
-                call_line=call_line,
-                args=args,
-                is_resolved=resolved,
-                callee_name=func_name,
-            ))
-
-    def _find_enclosing_func_regex(self, line: int, functions: list[FunctionNode]) -> FunctionNode | None:
-        """查找包含某行代码的函数"""
-        candidates = []
-        for func in functions:
-            if func.line_start < line <= func.line_end:
-                candidates.append(func)
-        if candidates:
-            candidates.sort(key=lambda f: f.line_start, reverse=True)
-            return candidates[0]
-        return None
-
-    def _extract_call_args(self, args_str: str) -> list[str]:
-        """从调用参数串中提取实参"""
-        if not args_str:
-            return []
-
-        args = []
-        depth = 0
-        current = ''
-        for ch in args_str:
-            if ch == ',' and depth == 0:
-                arg = current.strip()
-                if arg:
-                    args.append(arg[:50])  # 截断长表达式
-                current = ''
-            elif ch in '({[':
-                depth += 1
-                current += ch
-            elif ch in ')}]':
-                depth -= 1
-                current += ch
-            else:
-                current += ch
-
-        arg = current.strip()
-        if arg:
-            args.append(arg[:50])
-
-        return args
